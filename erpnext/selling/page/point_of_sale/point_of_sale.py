@@ -153,6 +153,12 @@ def get_items(start, page_length, price_list, item_group, pos_profile, search_te
 
 	lft, rgt = frappe.db.get_value("Item Group", item_group, ["lft", "rgt"])
 
+	# Optimization: Fetch item group names once instead of using a subquery in the loop
+	item_group_list = frappe.get_all("Item Group",
+		filters={"lft": [">=", lft], "rgt": ["<=", rgt]},
+		pluck="name"
+	)
+
 	bin_join_selection, bin_join_condition = "", ""
 	if hide_unavailable_items:
 		bin_join_selection = "LEFT JOIN `tabBin` bin ON bin.item_code = item.name"
@@ -175,7 +181,7 @@ def get_items(start, page_length, price_list, item_group, pos_profile, search_te
 			AND item.has_variants = 0
 			AND item.is_sales_item = 1
 			AND item.is_fixed_asset = 0
-			AND item.item_group in (SELECT name FROM `tabItem Group` WHERE lft >= {lft} AND rgt <= {rgt})
+			AND item.item_group IN %(item_groups)s
 			AND {condition}
 			{bin_join_condition}
 		ORDER BY
@@ -184,43 +190,71 @@ def get_items(start, page_length, price_list, item_group, pos_profile, search_te
 			{page_length} offset {start}""".format(
 			start=cint(start),
 			page_length=cint(page_length),
-			lft=cint(lft),
-			rgt=cint(rgt),
 			condition=condition,
 			bin_join_selection=bin_join_selection,
 			bin_join_condition=bin_join_condition,
 		),
-		{"warehouse": warehouse},
+		{"warehouse": warehouse, "item_groups": item_group_list},
 		as_dict=1,
 	)
 
 	# return (empty) list if there are no results
 	if not items_data:
 		return result
-
+	
+	# Optimization bulk item price
+	item_codes = [d.item_code for d in items_data]
 	current_date = frappe.utils.today()
+	ItemPrice = DocType("Item Price")
+
+	all_prices_data = (
+		frappe.qb.from_(ItemPrice)
+		.select(
+			ItemPrice.item_code,
+			ItemPrice.price_list_rate,
+			ItemPrice.currency,
+			ItemPrice.uom,
+			ItemPrice.batch_no,
+			ItemPrice.valid_from,
+			ItemPrice.valid_upto
+		)
+		.where(ItemPrice.price_list == price_list)
+		.where(ItemPrice.item_code.isin(item_codes))
+		.where(ItemPrice.selling == 1)
+		.where((ItemPrice.valid_from <= current_date) | (ItemPrice.valid_from.isnull()))
+		.where((ItemPrice.valid_upto >= current_date) | (ItemPrice.valid_upto.isnull()))
+		.orderby(ItemPrice.valid_from, order=Order.desc)
+	).run(as_dict=True)
+
+	# Group prices by item_code for fast lookup
+	price_map = {}
+	for price in all_prices_data:
+		price_map.setdefault(price.item_code, []).append(price)
 
 	for item in items_data:
 		item.actual_qty, _, is_negative_stock_allowed = get_stock_availability(item.item_code, warehouse)
 
-		ItemPrice = DocType("Item Price")
-		item_prices = (
-			frappe.qb.from_(ItemPrice)
-			.select(
-				ItemPrice.price_list_rate,
-				ItemPrice.currency,
-				ItemPrice.uom,
-				ItemPrice.batch_no,
-				ItemPrice.valid_from,
-				ItemPrice.valid_upto,
-			)
-			.where(ItemPrice.price_list == price_list)
-			.where(ItemPrice.item_code == item.item_code)
-			.where(ItemPrice.selling == 1)
-			.where((ItemPrice.valid_from <= current_date) | (ItemPrice.valid_from.isnull()))
-			.where((ItemPrice.valid_upto >= current_date) | (ItemPrice.valid_upto.isnull()))
-			.orderby(ItemPrice.valid_from, order=Order.desc)
-		).run(as_dict=True)
+		# Retrieves prices from our pre-fetched map instead of database
+		item_prices = price_map.get(item.item_code, [])
+
+		# ItemPrice = DocType("Item Price")
+		# item_prices = (
+		# 	frappe.qb.from_(ItemPrice)
+		# 	.select(
+		# 		ItemPrice.price_list_rate,
+		# 		ItemPrice.currency,
+		# 		ItemPrice.uom,
+		# 		ItemPrice.batch_no,
+		# 		ItemPrice.valid_from,
+		# 		ItemPrice.valid_upto,
+		# 	)
+		# 	.where(ItemPrice.price_list == price_list)
+		# 	.where(ItemPrice.item_code == item.item_code)
+		# 	.where(ItemPrice.selling == 1)
+		# 	.where((ItemPrice.valid_from <= current_date) | (ItemPrice.valid_from.isnull()))
+		# 	.where((ItemPrice.valid_upto >= current_date) | (ItemPrice.valid_upto.isnull()))
+		# 	.orderby(ItemPrice.valid_from, order=Order.desc)
+		# ).run(as_dict=True)
 
 		stock_uom_price = next((d for d in item_prices if d.get("uom") == item.stock_uom), {})
 		item_uom = item.stock_uom
