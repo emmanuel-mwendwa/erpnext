@@ -110,6 +110,11 @@ erpnext.PointOfSale.ItemCart = class {
 		);
 
 		this.$add_discount_elem = this.$component.find(".add-discount-wrapper");
+		this.$item_qty_total_container = this.$totals_section.find(".item-qty-total-container");
+		this.$item_qty_total_value = this.$item_qty_total_container.find(".item-qty-total-value");
+		this.$net_total_container = this.$totals_section.find(".net-total-container");
+		this.$grand_total_container = this.$totals_section.find(".grand-total-container");
+		this.$taxes_container = this.$totals_section.find(".taxes-container");
 	}
 
 	make_cart_numpad() {
@@ -147,6 +152,9 @@ erpnext.PointOfSale.ItemCart = class {
 		this.$numpad_section.append(
 			`<div class="numpad-btn checkout-btn" data-button-value="checkout">${__("Checkout")}</div>`
 		);
+		this.$numpad_item_qty_total = this.$numpad_section.find(".numpad-item-qty-total");
+		this.$numpad_net_total = this.$numpad_section.find(".numpad-net-total");
+		this.$numpad_grand_total = this.$numpad_section.find(".numpad-grand-total");
 	}
 
 	bind_events() {
@@ -517,39 +525,34 @@ erpnext.PointOfSale.ItemCart = class {
 
 	render_net_total(value) {
 		const currency = this.events.get_frm().doc.currency;
-		this.$totals_section
-			.find(".net-total-container")
-			.html(`<div>${__("Net Total")}</div><div>${format_currency(value, currency)}</div>`);
+		this.$net_total_container.html(
+			`<div>${__("Net Total")}</div><div>${format_currency(value, currency)}</div>`
+		);
 
-		this.$numpad_section
-			.find(".numpad-net-total")
-			.html(`<div>${__("Net Total")}: <span>${format_currency(value, currency)}</span></div>`);
+		this.$numpad_net_total.html(
+			`<div>${__("Net Total")}: <span>${format_currency(value, currency)}</span></div>`
+		);
 	}
 
 	render_total_item_qty(items) {
-		var total_item_qty = 0;
-		items.map((item) => {
-			total_item_qty = total_item_qty + item.qty;
-		});
+		const total_item_qty = items.reduce((total_qty, item) => total_qty + item.qty, 0);
 
-		this.$totals_section
-			.find(".item-qty-total-container")
-			.html(`<div>${__("Total Quantity")}</div><div>${total_item_qty}</div>`);
+		this.$item_qty_total_value.html(total_item_qty);
 
-		this.$numpad_section
-			.find(".numpad-item-qty-total")
-			.html(`<div>${__("Total Quantity")}: <span>${total_item_qty}</span></div>`);
+		this.$numpad_item_qty_total.html(
+			`<div>${__("Total Quantity")}: <span>${total_item_qty}</span></div>`
+		);
 	}
 
 	render_grand_total(value) {
 		const currency = this.events.get_frm().doc.currency;
-		this.$totals_section
-			.find(".grand-total-container")
-			.html(`<div>${__("Grand Total")}</div><div>${format_currency(value, currency)}</div>`);
+		this.$grand_total_container.html(
+			`<div>${__("Grand Total")}</div><div>${format_currency(value, currency)}</div>`
+		);
 
-		this.$numpad_section
-			.find(".numpad-grand-total")
-			.html(`<div>${__("Grand Total")}: <span>${format_currency(value, currency)}</span></div>`);
+		this.$numpad_grand_total.html(
+			`<div>${__("Grand Total")}: <span>${format_currency(value, currency)}</span></div>`
+		);
 	}
 
 	render_taxes(taxes) {
@@ -564,9 +567,9 @@ erpnext.PointOfSale.ItemCart = class {
 				</div>`;
 				})
 				.join("");
-			this.$totals_section.find(".taxes-container").css("display", "flex").html(taxes_html);
+			this.$taxes_container.css("display", "flex").html(taxes_html);
 		} else {
-			this.$totals_section.find(".taxes-container").css("display", "none").html("");
+			this.$taxes_container.css("display", "none").html("");
 		}
 	}
 
@@ -599,27 +602,29 @@ erpnext.PointOfSale.ItemCart = class {
 	render_cart_item(item_data, $item_to_update) {
 		const currency = this.events.get_frm().doc.currency;
 		const me = this;
+		const item_html = get_item_html();
 
 		if (!$item_to_update.length) {
 			this.$cart_items_wrapper.append(
-				`<div class="cart-item-wrapper" data-row-name="${escape(item_data.name)}"></div>
+				`<div class="cart-item-wrapper" data-row-name="${escape(item_data.name)}">${item_html}</div>
 				<div class="seperator"></div>`
 			);
 			$item_to_update = this.get_cart_item(item_data);
-		}
-
-		$item_to_update.html(
-			`${get_item_image_html()}
-			<div class="item-name-desc">
-				<div class="item-name">
+		} else {
+			$item_to_update.attr("data-row-name", escape(item_data.name));
+			$item_to_update.find(".item-image").replaceWith(get_item_image_html());
+			$item_to_update.find(".item-name-desc").html(
+				`<div class="item-name">
 					${item_data.item_name}
 				</div>
-				${get_description_html()}
-			</div>
-			${get_rate_discount_html()}`
-		);
+				${get_description_html()}`
+			);
+			$item_to_update.find(".item-qty-rate").replaceWith(get_rate_discount_html());
+		}
 
 		set_dynamic_rate_header_width();
+		this.$cart_header.css("display", "flex");
+		this.$cart_items_wrapper.find(".no-item-wrapper").remove();
 
 		function set_dynamic_rate_header_width() {
 			const rate_cols = Array.from(me.$cart_items_wrapper.find(".item-rate-amount"));
@@ -635,6 +640,17 @@ erpnext.PointOfSale.ItemCart = class {
 
 			me.$cart_header.find(".rate-amount-header").css("width", max_width);
 			me.$cart_items_wrapper.find(".item-rate-amount").css("width", max_width);
+		}
+
+		function get_item_html() {
+			return `${get_item_image_html()}
+			<div class="item-name-desc">
+				<div class="item-name">
+					${item_data.item_name}
+				</div>
+				${get_description_html()}
+			</div>
+			${get_rate_discount_html()}`;
 		}
 
 		function get_rate_discount_html() {
@@ -683,14 +699,13 @@ erpnext.PointOfSale.ItemCart = class {
 					<div class="item-image">
 						<img
 							onerror="cur_pos.cart.handle_broken_image(this)"
-							src="${image}" alt="${frappe.get_abbr(item_name)}"">
+							src="${image}" alt="${frappe.get_abbr(item_name)}">
 					</div>`;
 			} else {
 				return `<div class="item-image item-abbr">${frappe.get_abbr(item_name)}</div>`;
 			}
 		}
 	}
-
 	handle_broken_image($img) {
 		const item_abbr = $($img).attr("alt");
 		$($img).parent().replaceWith(`<div class="item-image item-abbr">${item_abbr}</div>`);
